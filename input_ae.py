@@ -1,22 +1,22 @@
 from __future__ import print_function
-import scipy.misc
 import tensorflow as tf
-import scipy.io as sio
 import numpy as np
 import dataset_parser
+from PIL import Image
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_integer("image_height", "256", "image target height")
 tf.flags.DEFINE_integer("image_width", "256", "image target width")
 tf.flags.DEFINE_integer("num_of_feature", "3", "number of feature")
-tf.flags.DEFINE_integer("num_of_class", "1", "number of class")
+tf.flags.DEFINE_integer("num_of_class", "92", "number of class")
 
-tf.flags.DEFINE_string("logs_dir", "./logs_ae_elec", "path to logs directory")
-tf.flags.DEFINE_integer("epochs", "30", "epochs for training")
-tf.flags.DEFINE_integer("batch_size", "9", "batch size for training")
-tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
+tf.flags.DEFINE_string("logs_dir", "./logs_ae", "path to logs directory")
+
+
 tf.flags.DEFINE_string('mode', "train", "Mode train/ test/ visualize")
-
+tf.flags.DEFINE_integer("batch_size", "9", "batch size for training")
+tf.flags.DEFINE_integer("num_epochs", "50", "number of epochs for training")
+tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
 
 def get_shape(tensor):
     static_shape = tensor.shape.as_list()
@@ -124,10 +124,38 @@ def simple_ae(x, drop_probability, is_training=False):
 def main(args=None):
     print(args)
     tf.reset_default_graph()
+    with tf.Graph().as_default():
+        # Input images and labels.
+        images, labels = dataset_parser.inputs(
+            train=True, batch_size=FLAGS.batch_size, num_epochs=FLAGS.num_epochs)
+
+        """
+        """
+        is_training = tf.placeholder(tf.bool)
+        global_step = tf.Variable(0, trainable=False)
+
+        # Build a Graph that computes predictions from the inference model.
+        drop_probability = tf.placeholder(tf.float32, name="drop_probability")
+        logits = simple_ae(x=images, drop_probability=drop_probability, is_training=is_training)
+
+        # Add to the Graph operations that train the model.
+        train_op = mnist.training(loss, FLAGS.learning_rate)
+
+        loss = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=logits, labels=labels, name="entropy")))
+        trainable_var = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES, scope='simple_ae')
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            train_op = tf.train.AdamOptimizer(FLAGS.learning_rate).minimize(
+                loss=loss, global_step=global_step, var_list=trainable_var)
+
+        # The op for initializing the variables.
+        init_op = tf.group(tf.global_variables_initializer(),
+                           tf.local_variables_initializer())
     """
     Dataset Parser
     """    # Parse Dataset
-    coco_parser = dataset_parser.ELECParser('./dataset/elec',
+    coco_parser = dataset_parser.MSCOCOParser('./dataset/coco_stuff',
                                               target_height=FLAGS.image_height, target_width=FLAGS.image_width)
     coco_parser.load_train_paths()
     # Hyper-parameters
@@ -143,19 +171,15 @@ def main(args=None):
     learning_rate = tf.placeholder(tf.float32)
     is_training = tf.placeholder(tf.bool)
     drop_probability = tf.placeholder(tf.float32, name="drop_probability")
-    data_x = tf.placeholder(tf.float32, shape=[None, None, None, FLAGS.num_of_feature],
-                            name="data_x")
-    data_y = tf.placeholder(tf.float32, shape=[None, None, None],
-                            name="data_y")
+    data_x = tf.placeholder(tf.float32, shape=[None, None, None, FLAGS.num_of_feature], name="data_x")
+    data_y = tf.placeholder(tf.int32, shape=[None, None, None], name="data_y")
     """
     Network
     """
     logits = simple_ae(x=data_x, drop_probability=drop_probability, is_training=is_training)
     # Loss
-    loss = tf.reduce_mean(
-        tf.losses.mean_squared_error(labels=data_y, predictions=tf.squeeze(logits, axis=3)), name='MSE')
-    # loss = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
-    #     logits=logits, labels=data_y, name="entropy")))
+    loss = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
+        logits=logits, labels=data_y, name="entropy")))
     """
     Optimizer
     """
@@ -167,7 +191,7 @@ def main(args=None):
     """
     Graph Logs
     """
-    tf.summary.scalar("MSE", loss)
+    tf.summary.scalar("entropy", loss)
     summary_op = tf.summary.merge_all()
     saver = tf.train.Saver(max_to_keep=2)
     """
@@ -188,11 +212,14 @@ def main(args=None):
             for epoch in range(0, epochs):
                 np.random.shuffle(coco_parser.train_paths)
                 for batch in range(0, batches):
-                    x_batch, y_batch = coco_parser.load_train_datum_batch_aug(batch*batch_size, (batch+1)*batch_size)
+                    x_batch, y_batch = coco_parser.load_train_datum_batch(
+                        batch*batch_size, (batch+1)*batch_size, need_aug=False)
                     x_batch_ori = np.array(x_batch, dtype=np.float32)
+                    y_batch_ori = np.array(y_batch, dtype=np.int32)
+                    # Data Normalize
                     x_batch = x_batch_ori - 127.5
-                    y_batch_ori = np.array(y_batch, dtype=np.float32)
-                    y_batch = y_batch_ori / 127.5 - 1.0
+                    y_batch = y_batch_ori - 92
+                    y_batch[np.nonzero(y_batch < 0)] = 91
                     feed_dict = {data_x: x_batch, data_y: y_batch,
                                  drop_probability: 0.2, is_training: True, learning_rate: cur_learning_rate}
                     _, loss_sess, global_step_sess = sess.run([train_op, loss, global_step], feed_dict=feed_dict)
@@ -206,25 +233,32 @@ def main(args=None):
                             data_x: x_batch, data_y: y_batch, drop_probability: 0.0, is_training: False})
                         summary_writer.add_summary(summary_str, global_step_sess)
 
-                    if global_step_sess % 1000 == 1:
+                    if global_step_sess % 500 == 1:
                         logits_sess = sess.run(logits, feed_dict={
                             data_x: x_batch, drop_probability: 0.0, is_training: False})
                         print('Logging images..')
                         for batch_idx, train_path in \
                                 enumerate(coco_parser.train_paths[batch*batch_size:(batch+1)*batch_size]):
                             name = train_path[0].split('/')[-1].split('.')[0]
-                            scipy.misc.imsave('{}/images/{:d}_{}_0_rgb.png'.format(
-                                FLAGS.logs_dir, global_step_sess, name), x_batch_ori[batch_idx].astype(np.uint8))
-                            # scipy.misc.imsave('{}/images/{:d}_{}_2_d.png'.format(
-                            #     FLAGS.logs_dir, global_step_sess, name), x_batch[batch_idx, :, :, 4])
-                            scipy.misc.imsave('{}/images/{:d}_{}_3_gt.png'.format(
-                                FLAGS.logs_dir, global_step_sess, name), y_batch_ori[batch_idx].astype(np.uint8))
-                            pred_reverse = (np.squeeze(logits_sess[batch_idx], axis=2) + 1.0) * 127.5
-                            pred_reverse = np.minimum(np.maximum(pred_reverse, 0), 255)
-                            scipy.misc.imsave('{}/images/{:d}_{}_4_pred.png'.format(
-                                FLAGS.logs_dir, global_step_sess, name), pred_reverse.astype(np.uint8))
 
-                    if global_step_sess % 2500 == 0:
+                            x_reverse = np.array(x_batch[batch_idx]) + 127.5
+                            x_png = Image.fromarray(x_reverse.astype(np.uint8)).convert('P')
+                            x_png.save('{}/images/{:d}_{}_0_rgb.png'.format(
+                                FLAGS.logs_dir, global_step_sess, name), format='PNG')
+
+                            y_reverse = np.array(y_batch[batch_idx]) + 92
+                            y_png = Image.fromarray(y_reverse.astype(np.uint8)).convert('P')
+                            y_png.putpalette(list(coco_parser.cmap))
+                            y_png.save('{}/images/{:d}_{}_1_gt.png'.format(
+                                FLAGS.logs_dir, global_step_sess, name), format='PNG')
+
+                            pred_reverse = np.argmax(logits_sess[batch_idx], axis=2) + 92
+                            pred_png = Image.fromarray(pred_reverse.astype(np.uint8)).convert('P')
+                            pred_png.putpalette(list(coco_parser.cmap))
+                            pred_png.save('{}/images/{:d}_{}_2_pred.png'.format(
+                                FLAGS.logs_dir, global_step_sess, name), format='PNG')
+
+                    if global_step_sess % 1500 == 0:
                         print('Saving model...')
                         saver.save(sess, FLAGS.logs_dir + "/model/model.ckpt", global_step=global_step_sess)
 
