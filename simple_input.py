@@ -10,10 +10,10 @@ FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_integer("image_height", "400", "image target height")
 tf.flags.DEFINE_integer("image_width", "400", "image target width")
 tf.flags.DEFINE_integer("num_of_feature", "3", "number of feature")
-tf.flags.DEFINE_integer("num_of_class", "92", "number of class")
+tf.flags.DEFINE_integer("num_of_class", "93", "number of class")
 
 tf.flags.DEFINE_string("logs_dir", "./logs_input", "path to logs directory")
-tf.flags.DEFINE_integer("num_epochs", "4", "number of epochs for training")
+tf.flags.DEFINE_integer("num_epochs", "50", "number of epochs for training")
 tf.flags.DEFINE_integer("batch_size", "9", "batch size for training")
 tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
 tf.flags.DEFINE_string('mode', "train", "Mode train/ test/ visualize")
@@ -41,8 +41,8 @@ def conv2d(input_tensor, filters, k_h=3, k_w=3, d_h=1, d_w=1, activation=None, n
     return conv
 
 
-def simple_deconv(x, is_training=False):
-    with tf.variable_scope("simple_deconv"):
+def simple_deconv(x, is_training=False, reuse=False):
+    with tf.variable_scope("simple_deconv", reuse=reuse):
         """ stage-1 400x400"""
         conv1 = conv2d(input_tensor=x, filters=32, activation=tf.nn.relu, name='conv1')
         batch_c1 = tf.layers.batch_normalization(inputs=conv1, training=is_training, name='batch_c1')
@@ -94,21 +94,20 @@ def main(args=None):
     """
     Read coco parser     
     """
-    coco_parser = dataset_parser.MSCOCOParser(dataset_dir='./dataset/coco_stuff',
-                                              image_height=FLAGS.image_height, image_width=FLAGS.image_width)
+    coco_parser = dataset_parser.MSCOCOParser(dataset_dir='./dataset/coco_stuff', flags=FLAGS)
     coco_parser.load_train_paths()
     coco_parser.load_val_paths()
     """
     Transform mscoco to TFRecord format (Only do once.)     
     """
     if False:
-        coco_parser.data2record_train(name='coco_stuff2017_train.tfrecords')
-        coco_parser.data2record_val(name='coco_stuff2017_val.tfrecords')
+        coco_parser.data2record(name='coco_stuff2017_train.tfrecords', test_num=500)
+        coco_parser.data2record(name='coco_stuff2017_val.tfrecords', test_num=100)
         return
     """
     Parse TFRecord format (For test.)
     """
-    if True:
+    if False:
         # training_filenames = \
         #     ['/home/andy/Github/2017_coco_stuff/dataset/coco_stuff_TFRecord/coco_stuff2017_train.tfrecords']
         # validation_filenames =\
@@ -157,89 +156,140 @@ def main(args=None):
                 sess.run(validation_iterator.initializer)
                 next_validation_x_sess, next_validation_y_sess = \
                     sess.run([next_validation_x, next_validation_y])
-                x_png = Image.fromarray(next_validation_x_sess[0].astype(np.uint8)).convert('P')
-                #x_png.save('{}/images/{}_{:d}_0_rgb.png'.format(
+                # x_png = Image.fromarray(next_validation_x_sess[0].astype(np.uint8)).convert('P')
+                # x_png.save('{}/images/{}_{:d}_0_rgb.png'.format(
                 #    FLAGS.logs_dir, 'val', global_step), format='PNG')
                 # break
         return
-
+    """
+    Build Graph
+    """
     with tf.Graph().as_default():
-        # filenames = tf.placeholder(tf.string, shape=[None])
-        file_names = 'coco_stuff2017.tfrecords'
-        dataset = tf.contrib.data.TFRecordDataset(file_names)
-        dataset = dataset.map(parser)
-        dataset = dataset.shuffle(buffer_size=500)
-        dataset = dataset.batch(FLAGS.batch_size)
-        #dataset = dataset.repeat(FLAGS.num_epochs)
-        # iterator = dataset.make_one_shot_iterator()
-        iterator = dataset.make_initializable_iterator()
-        # Input images and labels.
-        next_example, next_label = iterator.get_next()
         """
-        Build Graph
+        Input (TFRecord and Place_holder)
         """
-        global_step = tf.Variable(0, trainable=False)
+        # TFRecord
+        training_iterator = coco_parser.tfrecord_get_iterator(
+            name='coco_stuff2017_train.tfrecords', batch_size=FLAGS.batch_size,
+            shuffle_size=None, need_augmentation=False)
+        validation_iterator = coco_parser.tfrecord_get_iterator(
+            name='coco_stuff2017_val.tfrecords', batch_size=FLAGS.batch_size)
+        next_training_x, next_training_y = training_iterator.get_next()
+        next_validation_x, next_validation_y = validation_iterator.get_next()
+        # Place_holder
         learning_rate = tf.placeholder(tf.float32)
         is_training = tf.placeholder(tf.bool)
         drop_probability = tf.placeholder(tf.float32, name="drop_probability")
-        logits = simple_deconv(x=next_example, is_training=is_training)
+        """
+        Computes predictions from the inference model
+        """
+        logits = simple_deconv(x=next_training_x, is_training=is_training)
+        #logits_valid = simple_deconv(x=next_validation_x, is_training=is_training, reuse=True)
         # Loss
         loss = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=logits, labels=next_label, name="loss")))
-        loss_valid = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=logits, labels=next_label, name="loss_valid")))
+            logits=logits, labels=next_training_y, name="loss")))
+        #loss_valid = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
+        #    logits=logits_valid, labels=next_validation_y, name="loss_valid")))
         """
         Optimizer
         """
+        global_step = tf.Variable(0, trainable=False)
         trainable_var = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES, scope='simple_deconv')
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
             train_op = tf.train.AdamOptimizer(learning_rate).minimize(
                 loss=loss, global_step=global_step, var_list=trainable_var)
         """
-        Graph Logs
+        Other Variables 
         """
+        # Graph Logs
         summary_loss = tf.summary.scalar("loss", loss)
-        summary_loss_valid = tf.summary.scalar("loss_valid", loss_valid)
+        #summary_loss_valid = tf.summary.scalar("loss_valid", loss_valid)
         saver = tf.train.Saver(max_to_keep=2)
-        """
-        Initial OP
-        """
+        # Initial OP
         init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
         """
         Session
         """
         with tf.Session() as sess:
-            #summary_writer = tf.summary.FileWriter(FLAGS.logs_dir + '/events', sess.graph)
-            #sess.run(init_op)
-            #ckpt = tf.train.get_checkpoint_state(FLAGS.logs_dir + '/model')
-            #if ckpt and ckpt.model_checkpoint_path:
-            #    saver.restore(sess, ckpt.model_checkpoint_path)
-            #    print("Model restored: {}".format(ckpt.model_checkpoint_path))
-            #else:
-            #    print("No Model found.")
-
+            """
+            Model restore and initialize
+            """
+            summary_writer = tf.summary.FileWriter(coco_parser.logs_dir, sess.graph)
             sess.run(init_op)
-
+            ckpt = tf.train.get_checkpoint_state(coco_parser.checkpoint_dir)
+            if ckpt and ckpt.model_checkpoint_path:
+                saver.restore(sess, ckpt.model_checkpoint_path)
+                print("Model restored: {}".format(ckpt.model_checkpoint_path))
+            else:
+                print("No Model found.")
+            """
+            Training
+            """
             if FLAGS.mode == 'train':
-                sess.run(iterator.initializer)
-                while True:
-                    try:
-                        feed_dict = {drop_probability: 0.2, is_training: True, learning_rate: FLAGS.learning_rate}
-                        _, loss_sess, global_step_sess = sess.run([train_op, loss, global_step], feed_dict=feed_dict)
+                print('Training mode! Batch size is:{:d}'.format(FLAGS.batch_size))
+                feed_dict_train = {drop_probability: 0.2, is_training: True, learning_rate: FLAGS.learning_rate}
+                feed_dict_infer = {drop_probability: 1.0, is_training: False, learning_rate: FLAGS.learning_rate}
+                for epoch in range(FLAGS.num_epochs):
+                    sess.run(training_iterator.initializer)
+                    sess.run(validation_iterator.initializer)
+                    while True:
+                        try:
+                            """
+                            Optimize training loss
+                            """
+                            _, loss_sess, global_step_sess = \
+                                sess.run([train_op, loss, global_step], feed_dict=feed_dict_train)
+                            print('[{:d}/{:d}, global_step:{:d}, training loss:{:f}]'.format(
+                                epoch, FLAGS.num_epochs, global_step_sess, loss_sess))
 
-                        print('global_setp: {:d}, loss: {:f}'
-                              .format(global_step_sess, loss_sess))
+                            """
+                            Observe training situation (For debugging.)
+                            """
+                            if global_step_sess % 200 == 1:
+                                try:
+                                    next_training_x_sess, next_training_y_sess, logits_sess = \
+                                        sess.run([next_training_x, next_training_y, logits], feed_dict=feed_dict_infer)
+                                    print('Logging training images.')
+                                    coco_parser.visualize_data(
+                                        x_batches=next_training_x_sess, y_batches=next_training_y_sess,
+                                        global_step=global_step_sess, pred_batches=logits_sess,
+                                        logs_dir=coco_parser.logs_image_train_dir)
+                                except tf.errors.OutOfRangeError:
+                                    print('One epochs finished! (During visualization.)')
+                                    break
+                            """
+                            if global_step_sess % 50 == 1:
+                                try:
+                                    next_validation_x_sess, next_validation_y_sess, logits_valid_sess = \
+                                        sess.run([next_validation_x, next_validation_y, logits_valid],
+                                                 feed_dict=feed_dict_infer)
+                                    print('Logging validation images.')
+                                    coco_parser.visualize_data(
+                                        x_batches=next_validation_x_sess, y_batches=next_validation_y_sess,
+                                        global_step=global_step_sess, pred_batches=logits_valid_sess,
+                                        logs_dir=os.path.join(FLAGS.logs_dir, 'images_valid'))
+                                except tf.errors.OutOfRangeError:
+                                    print('One validation finished! (During visualization.)')
+                                    break
 
-                        if global_step_sess % 20 == 1:
-                            logits_sess = next_example.eval()
-                            yo = logits_sess
-
-                    except tf.errors.OutOfRangeError:
-                        break
-
-
-
+                            """
+                        except tf.errors.OutOfRangeError:
+                            print('One epochs finished!')
+                            break
+                    """
+                    Perform end-of-epoch calculations here.
+                    """
+                    saver.save(sess, FLAGS.logs_dir + "/model/model.ckpt", global_step=global_step.eval())
+                    """
+                    Validation
+                    """
+                    #next_validation_x_sess, next_validation_y_sess = \
+                    #    sess.run([next_validation_x, next_validation_y])
+                    #x_png = Image.fromarray(next_validation_x_sess[0].astype(np.uint8)).convert('P')
+                    # x_png.save('{}/images/{}_{:d}_0_rgb.png'.format(
+                    #    FLAGS.logs_dir, 'val', global_step), format='PNG')
+                    # break
             elif FLAGS.mode == 'test-dev':
                 print('test')
                 # Define path

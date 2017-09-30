@@ -18,8 +18,8 @@ def _bytes_feature(value):
 
 
 class MSCOCOParser:
-    def __init__(self, dataset_dir, image_height=256, image_width=256):
-        self.image_height, self.image_width = image_height, image_width
+    def __init__(self, dataset_dir, flags):
+        self.image_height, self.image_width = flags.image_height, flags.image_width
         self.dataset_dir = dataset_dir
 
         self.images_train_dir = self.dataset_dir + '/images/train2017'
@@ -38,6 +38,23 @@ class MSCOCOParser:
         cmap = cmap.reshape((-1))
         assert len(cmap) == 768, 'Error: Color map must have exactly 256*3 elements!'
         self.cmap = cmap
+
+        self.logs_dir = os.path.join(flags.logs_dir, 'events')
+        self.checkpoint_dir = os.path.join(flags.logs_dir, 'models')
+        self.logs_image_train_dir = os.path.join(flags.logs_dir, 'images_train')
+        self.logs_image_valid_dir = os.path.join(flags.logs_dir, 'images_valid')
+        self.dir_check()
+
+    def dir_check(self):
+        print('checking directories.')
+        if not os.path.exists(self.logs_dir):
+            os.makedirs(self.logs_dir)
+        if not os.path.exists(self.checkpoint_dir):
+            os.makedirs(self.checkpoint_dir)
+        if not os.path.exists(self.logs_image_train_dir):
+            os.makedirs(self.logs_image_train_dir)
+        if not os.path.exists(self.logs_image_valid_dir):
+            os.makedirs(self.logs_image_valid_dir)
 
     def load_val_paths(self):
         self.annotations_val_paths = sorted(glob(os.path.join(self.annotations_val_dir, "*.png")))
@@ -140,7 +157,7 @@ class MSCOCOParser:
 
         return x, y
 
-    def data2record_train(self, name='coco_stuff2017_train.tfrecords'):
+    def data2record(self, name='coco_stuff2017_train.tfrecords', test_num=None):
 
         filename = os.path.join(self.TFRecord_dir, name)
         print('Writing', filename)
@@ -155,9 +172,9 @@ class MSCOCOParser:
             # Some images are gray-scale
             if len(x.shape) < 3:
                 x = np.dstack((x, x, x))
-            # Label [92, 183] -> [0, 91]
-            y -= 92
-            y[np.nonzero(y < 0)] = 91
+            # Label [92, 183] -> [1, 92]
+            y[np.nonzero(y < 92)] = 183
+            y -= 91
 
             image_raw = x.tostring()
             label_raw = y.tostring()
@@ -168,42 +185,32 @@ class MSCOCOParser:
                 'image_raw': _bytes_feature(image_raw)}))
             writer.write(example.SerializeToString())
 
-            if idx > 200:
+            if test_num is not None and idx > test_num:
                 break
 
         writer.close()
 
-    def data2record_val(self, name='coco_stuff2017_val.tfrecords'):
+    @staticmethod
+    def preprocess_data(image, label):
+        # Subtract off the mean and divide by the variance of the pixels.
+        image = tf.cast(image, tf.float32)
+        image = image - 127.5
+        # tf.image.per_image_standardization(image)
 
-        filename = os.path.join(self.TFRecord_dir, name)
-        print('Writing', filename)
-        writer = tf.python_io.TFRecordWriter(filename)
-        for idx, val_path in enumerate(self.val_paths):
-            print('[{:d}/{:d}]'.format(idx, len(self.val_paths)))
-            x = np.array(Image.open(val_path[0]))
-            y = np.array(Image.open(val_path[1]))
+        label = tf.cast(label, tf.int32)
+        return image, label
 
-            rows = x.shape[0]
-            cols = x.shape[1]
-            # Some images are gray-scale
-            if len(x.shape) < 3:
-                x = np.dstack((x, x, x))
-            # Label [92, 183] -> [0, 91]
-            y -= 92
-            y[np.nonzero(y < 0)] = 91
-
-            image_raw = x.tostring()
-            label_raw = y.tostring()
-            example = tf.train.Example(features=tf.train.Features(feature={
-                'height': _int64_feature(rows),
-                'width': _int64_feature(cols),
-                'label_raw': _bytes_feature(label_raw),
-                'image_raw': _bytes_feature(image_raw)}))
-            writer.write(example.SerializeToString())
-
-            if idx > 200:
-                break
-        writer.close()
+    @staticmethod
+    def deprocess_data(image, label, pred_batches=None):
+        image = image + 127.5
+        label += 91
+        label[label == 91] = 183
+        if pred_batches is not None:
+            pred_batches = np.argmax(pred_batches, axis=3) + 91
+            pred_batches[pred_batches == 91] = 183
+            return image, label, pred_batches
+        else:
+            return image, label
 
     def parse_record(self, record):
         features = tf.parse_single_example(
@@ -237,6 +244,7 @@ class MSCOCOParser:
             image_height,
             image_width)
         combined_crop = tf.random_crop(value=combined_pad, size=(self.image_height, self.image_width, 4))
+        combined_crop = tf.image.random_flip_left_right(combined_crop)
         # combined_crop = tf.image.crop_to_bounding_box(combined_pad, 0, 0, FLAGS.image_height, FLAGS.image_width)
         # combine = tf.image.resize_image_with_crop_or_pad(combine, FLAGS.image_height, FLAGS.image_width)
         # OPTIONAL: Could reshape into a 28x28 image and apply distortions
@@ -245,22 +253,98 @@ class MSCOCOParser:
         # into a vector, we don't bother.
 
         image = combined_crop[:, :, :3]
-        # Convert from [0, 255] -> [-0.5, 0.5] floats.
-        # image = tf.cast(image, tf.float32) * (1. / 255) - 0.5
-
         label = combined_crop[:, :, -1]
-        # Convert label from a scalar uint8 tensor to an int32 scalar.
-        label = tf.cast(label, tf.int32)
+        image, label = self.preprocess_data(image=image, label=label)
 
         return image, label
 
-    def tfrecord_get_iterator(self, name, batch_size):
+    def parse_record_augmentation(self, record):
+        features = tf.parse_single_example(
+            record,
+            # Defaults are not specified since both keys are required.
+            features={
+                'height': tf.FixedLenFeature([], tf.int64),
+                'width': tf.FixedLenFeature([], tf.int64),
+                'image_raw': tf.FixedLenFeature([], tf.string),
+                'label_raw': tf.FixedLenFeature([], tf.string)
+            })
+
+        height = tf.cast(features['height'], tf.int32)
+        width = tf.cast(features['width'], tf.int32)
+        # Convert from a scalar string tensor (whose single string has
+        # length mnist.IMAGE_PIXELS) to a uint8 tensor with shape
+        # [mnist.IMAGE_PIXELS].
+        image = tf.decode_raw(features['image_raw'], tf.uint8)
+        image = tf.reshape(image, [height, width, 3])
+        label = tf.decode_raw(features['label_raw'], tf.uint8)
+        label = tf.reshape(label, [height, width, 1])
+
+        # augmentation:
+        image = tf.cast(image, tf.float32)
+        label = tf.cast(label, tf.float32)
+        image = tf.image.random_brightness(image, max_delta=63)
+        image = tf.image.random_contrast(image, lower=0.2, upper=1.8)
+
+        combined = tf.concat((image, label), axis=2)
+        image_height = tf.maximum(height, self.image_height)
+        image_width = tf.maximum(width, self.image_width)
+        offset_height = tf.cast(tf.floor((image_height - height) / 2), tf.int32)
+        offset_width = tf.cast(tf.floor((image_width - width) / 2), tf.int32)
+
+        combined_pad = tf.image.pad_to_bounding_box(
+            combined, offset_height, offset_width,
+            image_height,
+            image_width)
+        combined_crop = tf.random_crop(value=combined_pad, size=(self.image_height, self.image_width, 4))
+
+        # need_augmentation:
+        combined_crop = tf.image.random_flip_left_right(combined_crop)
+        # combined_crop = tf.image.crop_to_bounding_box(combined_pad, 0, 0, FLAGS.image_height, FLAGS.image_width)
+        # combine = tf.image.resize_image_with_crop_or_pad(combine, FLAGS.image_height, FLAGS.image_width)
+        # OPTIONAL: Could reshape into a 28x28 image and apply distortions
+        # here.  Since we are not applying any distortions in this
+        # example, and the next step expects the image to be flattened
+        # into a vector, we don't bother.
+
+        image = combined_crop[:, :, :3]
+        label = combined_crop[:, :, -1]
+        image, label = self.preprocess_data(image=image, label=label)
+
+        return image, label
+
+    def tfrecord_get_iterator(self, name, batch_size, shuffle_size=None, need_augmentation=False):
         filename = os.path.join(self.TFRecord_dir, name)
         dataset = tf.contrib.data.TFRecordDataset(filename)
-        dataset = dataset.map(self.parse_record)  # Parse the record into tensors.
+        if need_augmentation:
+            dataset = dataset.map(self.parse_record_augmentation)
+        else:
+            dataset = dataset.map(self.parse_record)
+        if shuffle_size is not None:
+            dataset = dataset.shuffle(buffer_size=shuffle_size)
         dataset = dataset.batch(batch_size)
         iterator = dataset.make_initializable_iterator()
         return iterator
+
+    def visualize_data(self, x_batches, y_batches, pred_batches, global_step, logs_dir):
+        x_batches, y_batches, pred_batches, = self.deprocess_data(
+            image=x_batches, label=y_batches, pred_batches=pred_batches)
+
+        for batch_idx, x_batch in enumerate(x_batches):
+            x_png = Image.fromarray(x_batch.astype(np.uint8)).convert('P')
+            x_png.save('{}/{:d}_{:d}_0_rgb.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
+
+        for batch_idx, y_batch in enumerate(y_batches):
+            y_png = Image.fromarray(y_batch.astype(np.uint8)).convert('P')
+            y_png.putpalette(list(self.cmap))
+            y_png.save('{}/{:d}_{:d}_1_gt.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
+
+        for batch_idx, pred_batch in enumerate(pred_batches):
+            pred_png = Image.fromarray(pred_batch.astype(np.uint8)).convert('P')
+            pred_png.putpalette(list(self.cmap))
+            pred_png.save('{}/{:d}_{}_2_pred.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
 
 
 class ELECParser:
