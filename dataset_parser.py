@@ -6,7 +6,7 @@ import numpy as np
 from glob import glob
 from PIL import Image
 from pycocotools import cocostuffhelper
-# from pycocotools.coco import COCO
+from pycocotools.coco import COCO
 
 
 def _int64_feature(value):
@@ -24,8 +24,11 @@ class MSCOCOParser:
 
         self.images_train_dir = self.dataset_dir + '/images/train2017'
         self.images_val_dir = self.dataset_dir + '/images/val2017'
+        self.images_test_dir = self.dataset_dir + '/images/test2017'
         self.annotations_train_dir = self.dataset_dir + '/annotations/stuff_train2017_pixelmaps'
         self.annotations_val_dir = self.dataset_dir + '/annotations/stuff_val2017_pixelmaps'
+        self.annotations_test_dev_info = self.dataset_dir + '/annotations/image_info_test-dev2017.json'
+        self.annotations_test_info = self.dataset_dir + '/annotations/image_info_test2017.json'
         self.TFRecord_dir = './dataset/coco_stuff_TFRecord'
 
         self.images_val_paths, self.annotations_val_paths, self.val_paths = [], [], []
@@ -157,13 +160,17 @@ class MSCOCOParser:
 
         return x, y
 
-    def data2record(self, name='coco_stuff2017_train.tfrecords', test_num=None):
-
+    def data2record(self, name='coco_stuff2017_train.tfrecords', is_training=True, test_num=None):
         filename = os.path.join(self.TFRecord_dir, name)
         print('Writing', filename)
         writer = tf.python_io.TFRecordWriter(filename)
-        for idx, train_path in enumerate(self.train_paths):
-            print('[{:d}/{:d}]'.format(idx, len(self.train_paths)))
+        if is_training:
+            paths = self.train_paths
+        else:
+            paths = self.val_paths
+
+        for idx, train_path in enumerate(paths):
+            print('[{:d}/{:d}]'.format(idx, len(paths)))
             x = np.array(Image.open(train_path[0]))
             y = np.array(Image.open(train_path[1]))
 
@@ -173,8 +180,8 @@ class MSCOCOParser:
             if len(x.shape) < 3:
                 x = np.dstack((x, x, x))
             # Label [92, 183] -> [1, 92]
-            y[np.nonzero(y < 92)] = 183
-            y -= 91
+            # y[np.nonzero(y < 92)] = 183
+            # y -= 91
 
             image_raw = x.tostring()
             label_raw = y.tostring()
@@ -186,6 +193,39 @@ class MSCOCOParser:
             writer.write(example.SerializeToString())
 
             if test_num is not None and idx > test_num:
+                break
+
+        writer.close()
+
+    def data2record_test(self, name='coco_stuff2017_test.tfrecords', is_dev=True, test_num=None):
+        filename = os.path.join(self.TFRecord_dir, name)
+        print('Writing', filename)
+        writer = tf.python_io.TFRecordWriter(filename)
+        if is_dev:
+            coco_gt = COCO(self.annotations_test_dev_info)
+        else:
+            coco_gt = COCO(self.annotations_test_info)
+        for key_idx, key in enumerate(coco_gt.imgs):
+            print('{:d}/{:d}'.format(key_idx, len(coco_gt.imgs)))
+            value = coco_gt.imgs[key]
+            file_name = value['file_name']
+            x = Image.open(os.path.join(self.images_test_dir, file_name))
+            x = np.array(x)
+
+            rows = x.shape[0]
+            cols = x.shape[1]
+            # Some images are gray-scale
+            if len(x.shape) < 3:
+                x = np.dstack((x, x, x))
+
+            image_raw = x.tostring()
+            example = tf.train.Example(features=tf.train.Features(feature={
+                'height': _int64_feature(rows),
+                'width': _int64_feature(cols),
+                'image_raw': _bytes_feature(image_raw)}))
+            writer.write(example.SerializeToString())
+
+            if test_num is not None and key_idx > test_num:
                 break
 
         writer.close()
@@ -233,57 +273,11 @@ class MSCOCOParser:
         label = tf.decode_raw(features['label_raw'], tf.uint8)
         label = tf.reshape(label, [height, width, 1])
 
-        combined = tf.concat((image, label), axis=2)
-        image_height = tf.maximum(height, self.image_height)
-        image_width = tf.maximum(width, self.image_width)
-        offset_height = tf.cast(tf.floor((image_height - height) / 2), tf.int32)
-        offset_width = tf.cast(tf.floor((image_width - width) / 2), tf.int32)
-
-        combined_pad = tf.image.pad_to_bounding_box(
-            combined, offset_height, offset_width,
-            image_height,
-            image_width)
-        combined_crop = tf.random_crop(value=combined_pad, size=(self.image_height, self.image_width, 4))
-        combined_crop = tf.image.random_flip_left_right(combined_crop)
-        # combined_crop = tf.image.crop_to_bounding_box(combined_pad, 0, 0, FLAGS.image_height, FLAGS.image_width)
-        # combine = tf.image.resize_image_with_crop_or_pad(combine, FLAGS.image_height, FLAGS.image_width)
-        # OPTIONAL: Could reshape into a 28x28 image and apply distortions
-        # here.  Since we are not applying any distortions in this
-        # example, and the next step expects the image to be flattened
-        # into a vector, we don't bother.
-
-        image = combined_crop[:, :, :3]
-        label = combined_crop[:, :, -1]
-        image, label = self.preprocess_data(image=image, label=label)
-
-        return image, label
-
-    def parse_record_augmentation(self, record):
-        features = tf.parse_single_example(
-            record,
-            # Defaults are not specified since both keys are required.
-            features={
-                'height': tf.FixedLenFeature([], tf.int64),
-                'width': tf.FixedLenFeature([], tf.int64),
-                'image_raw': tf.FixedLenFeature([], tf.string),
-                'label_raw': tf.FixedLenFeature([], tf.string)
-            })
-
-        height = tf.cast(features['height'], tf.int32)
-        width = tf.cast(features['width'], tf.int32)
-        # Convert from a scalar string tensor (whose single string has
-        # length mnist.IMAGE_PIXELS) to a uint8 tensor with shape
-        # [mnist.IMAGE_PIXELS].
-        image = tf.decode_raw(features['image_raw'], tf.uint8)
-        image = tf.reshape(image, [height, width, 3])
-        label = tf.decode_raw(features['label_raw'], tf.uint8)
-        label = tf.reshape(label, [height, width, 1])
-
         # augmentation:
-        image = tf.cast(image, tf.float32)
-        label = tf.cast(label, tf.float32)
-        image = tf.image.random_brightness(image, max_delta=63)
-        image = tf.image.random_contrast(image, lower=0.2, upper=1.8)
+        # image = tf.cast(image, tf.float32)
+        # label = tf.cast(label, tf.float32)
+        # image = tf.image.random_brightness(image, max_delta=63)
+        # image = tf.image.random_contrast(image, lower=0.2, upper=1.8)
 
         combined = tf.concat((image, label), axis=2)
         image_height = tf.maximum(height, self.image_height)
@@ -296,8 +290,6 @@ class MSCOCOParser:
             image_height,
             image_width)
         combined_crop = tf.random_crop(value=combined_pad, size=(self.image_height, self.image_width, 4))
-
-        # need_augmentation:
         combined_crop = tf.image.random_flip_left_right(combined_crop)
         # combined_crop = tf.image.crop_to_bounding_box(combined_pad, 0, 0, FLAGS.image_height, FLAGS.image_width)
         # combine = tf.image.resize_image_with_crop_or_pad(combine, FLAGS.image_height, FLAGS.image_width)
@@ -312,18 +304,14 @@ class MSCOCOParser:
 
         return image, label
 
-    def tfrecord_get_iterator(self, name, batch_size, shuffle_size=None, need_augmentation=False):
+    def tfrecord_get_dataset(self, name, batch_size, shuffle_size=None):
         filename = os.path.join(self.TFRecord_dir, name)
         dataset = tf.contrib.data.TFRecordDataset(filename)
-        if need_augmentation:
-            dataset = dataset.map(self.parse_record_augmentation)
-        else:
-            dataset = dataset.map(self.parse_record)
+        dataset = dataset.map(self.parse_record)
         if shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=shuffle_size)
         dataset = dataset.batch(batch_size)
-        iterator = dataset.make_initializable_iterator()
-        return iterator
+        return dataset
 
     def visualize_data(self, x_batches, y_batches, pred_batches, global_step, logs_dir):
         x_batches, y_batches, pred_batches, = self.deprocess_data(

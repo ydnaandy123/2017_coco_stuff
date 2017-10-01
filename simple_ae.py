@@ -14,9 +14,9 @@ tf.flags.DEFINE_integer("num_of_class", "92", "number of class")
 
 tf.flags.DEFINE_string("logs_dir", "./logs_ae", "path to logs directory")
 tf.flags.DEFINE_integer("epochs", "50", "epochs for training")
-tf.flags.DEFINE_integer("batch_size", "1", "batch size for training")
+tf.flags.DEFINE_integer("batch_size", "9", "batch size for training")
 tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
-tf.flags.DEFINE_string('mode', "test-dev", "Mode train/ test/ visualize")
+tf.flags.DEFINE_string('mode', "train", "Mode train/ test/ visualize")
 
 
 def get_shape(tensor):
@@ -27,7 +27,21 @@ def get_shape(tensor):
     return dims
 
 
-def simple_ae(x, drop_probability, is_training=False):
+def deconv2d(input_tensor, filters, k_h=3, k_w=3, d_h=2, d_w=2, activation=None, name="deconv2d"):
+    deconv = tf.layers.conv2d_transpose(inputs=input_tensor, filters=filters, kernel_size=[k_h, k_w],
+                                        kernel_initializer=tf.contrib.layers.xavier_initializer(),
+                                        strides=[d_h, d_w], padding='same', activation=activation, name=name)
+    return deconv
+
+
+def conv2d(input_tensor, filters, k_h=3, k_w=3, d_h=1, d_w=1, activation=None, name="conv2d"):
+    conv = tf.layers.conv2d(inputs=input_tensor, filters=filters, kernel_size=[k_h, k_w],
+                            kernel_initializer=tf.contrib.layers.xavier_initializer(),
+                            strides=[d_h, d_w], padding='same', activation=activation, name=name)
+    return conv
+
+
+def simple_ae(x, drop_probability, is_training=False, reuse=False):
     with tf.variable_scope("simple_ae"):
         """ conv0 256x256"""
         conv0 = tf.layers.conv2d(inputs=x, filters=32, kernel_size=[3, 3],
@@ -128,8 +142,7 @@ def main(args=None):
     """
     Dataset Parser
     """    # Parse Dataset
-    coco_parser = dataset_parser.MSCOCOParser('./dataset/coco_stuff',
-                                              target_height=FLAGS.image_height, target_width=FLAGS.image_width)
+    coco_parser = dataset_parser.MSCOCOParser('./dataset/coco_stuff', flags=FLAGS)
     coco_parser.load_train_paths()
     # Hyper-parameters
     epochs, batch_size = FLAGS.epochs, FLAGS.batch_size
@@ -149,7 +162,7 @@ def main(args=None):
     """
     Network
     """
-    logits = simple_ae(x=data_x, drop_probability=drop_probability, is_training=is_training)
+    logits = simple_ae(x=data_x,  drop_probability=drop_probability, is_training=is_training)
     # Loss
     loss = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
         logits=logits, labels=data_y, name="entropy")))
@@ -216,19 +229,19 @@ def main(args=None):
 
                             x_reverse = np.array(x_batch[batch_idx]) + 127.5
                             x_png = Image.fromarray(x_reverse.astype(np.uint8)).convert('P')
-                            x_png.save('{}/images/{:d}_{}_0_rgb.png'.format(
+                            x_png.save('{}/images_train/{:d}_{}_0_rgb.png'.format(
                                 FLAGS.logs_dir, global_step_sess, name), format='PNG')
 
                             y_reverse = np.array(y_batch[batch_idx]) + 92
                             y_png = Image.fromarray(y_reverse.astype(np.uint8)).convert('P')
                             y_png.putpalette(list(coco_parser.cmap))
-                            y_png.save('{}/images/{:d}_{}_1_gt.png'.format(
+                            y_png.save('{}/images_train/{:d}_{}_1_gt.png'.format(
                                 FLAGS.logs_dir, global_step_sess, name), format='PNG')
 
                             pred_reverse = np.argmax(logits_sess[batch_idx], axis=2) + 92
                             pred_png = Image.fromarray(pred_reverse.astype(np.uint8)).convert('P')
                             pred_png.putpalette(list(coco_parser.cmap))
-                            pred_png.save('{}/images/{:d}_{}_2_pred.png'.format(
+                            pred_png.save('{}/images_train/{:d}_{}_2_pred.png'.format(
                                 FLAGS.logs_dir, global_step_sess, name), format='PNG')
 
                     if global_step_sess % 1500 == 0:
