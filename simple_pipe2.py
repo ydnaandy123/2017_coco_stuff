@@ -5,7 +5,7 @@ import numpy as np
 import dataset_parser
 from PIL import Image
 from pycocotools.coco import COCO
-from model import simple_ae
+from model import simple_ae2
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_integer("image_height", "400", "image target height")
@@ -13,11 +13,11 @@ tf.flags.DEFINE_integer("image_width", "400", "image target width")
 tf.flags.DEFINE_integer("num_of_feature", "3", "number of feature")
 tf.flags.DEFINE_integer("num_of_class", "184", "number of class")
 
-tf.flags.DEFINE_string("logs_dir", "./logs_pipe", "path to logs directory")
+tf.flags.DEFINE_string("logs_dir", "./logs_pipe2", "path to logs directory")
 tf.flags.DEFINE_integer("num_epochs", "50", "number of epochs for training")
 tf.flags.DEFINE_integer("batch_size", "2", "batch size for training")
 tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
-tf.flags.DEFINE_string('mode', "train", "Mode train/ test/ visualize")
+tf.flags.DEFINE_string('mode', "test-dev", "Mode train/ test-dev/ test")
 
 
 def main(args=None):
@@ -72,16 +72,16 @@ def main(args=None):
         """
         with tf.name_scope(name='Network'):
             # Inference
-            with tf.variable_scope("simple_ae", reuse=False):
-                logits = simple_ae(x=next_x, flags=FLAGS, is_training=is_training)
-            with tf.variable_scope("simple_ae", reuse=True):
-                logits_infer = simple_ae(x=data_x, flags=FLAGS, is_training=False)
+            with tf.variable_scope("simple_ae2", reuse=False):
+                logits = simple_ae2(x=next_x, flags=FLAGS, is_training=is_training)
+            with tf.variable_scope("simple_ae2", reuse=True):
+                logits_infer = simple_ae2(x=data_x, flags=FLAGS, is_training=False)
             # Loss
             loss = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
                 logits=logits, labels=next_y, name="loss")))
             # Optimizer
             global_step = tf.Variable(0, trainable=False)
-            trainable_var = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES, scope='simple_ae')
+            trainable_var = tf.get_collection(key=tf.GraphKeys.TRAINABLE_VARIABLES, scope='simple_ae2')
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             with tf.control_dependencies(update_ops):
                 train_op = tf.train.AdamOptimizer(learning_rate).minimize(
@@ -119,7 +119,7 @@ def main(args=None):
                 print('Training mode! Batch size:{:d}, Learning rate:{:f}'.format(
                     FLAGS.batch_size, FLAGS.learning_rate))
                 events_freq, observe_freq, save_freq = 20, 1500, 1000
-                val_freq, val_max_num = 20000, 2000
+                val_freq, val_max_num = 5000, 400
                 """
                 Iterators
                 """
@@ -163,7 +163,7 @@ def main(args=None):
                                     logs_dir=coco_parser.logs_image_train_dir)
 
                             # Logging the events (validation)
-                            if True and global_step_sess % val_freq == 1:
+                            if True and global_step_sess % val_freq == (val_freq-1):
                                 valid_sum_loss, valid_times = 0, 0
                                 sess.run(validation_iterator.initializer)
                                 while True:
@@ -211,47 +211,9 @@ def main(args=None):
                             break
 
             elif FLAGS.mode == 'test-dev':
-                print('test')
-                # Define path
-                ann_file = './dataset/coco_stuff/annotations/image_info_test-dev2017.json'
-                test_dir = './dataset/coco_stuff/images/test2017'
-                # Initialize COCO ground truth API
-                coco_gt = COCO(ann_file)
-                for key_idx, key in enumerate(coco_gt.imgs):
-                    print('{:d}/{:d}'.format(key_idx, len(coco_gt.imgs)))
-                    value = coco_gt.imgs[key]
-                    file_name = value['file_name']
-                    image = Image.open(os.path.join(test_dir, file_name))
-                    ##############################################################
-                    width, height = image.size
-                    width_new = ((width // 16) + 1) * 16 if width % 16 != 0 else width
-                    height_new = ((height // 16) + 1) * 16 if height % 16 != 0 else height
-
-                    new_im = Image.new("RGB", (width_new, height_new))
-                    box_left = np.floor((width_new - width) / 2).astype(np.int32)
-                    box_upper = np.floor((height_new - height) / 2).astype(np.int32)
-                    new_im.paste(image, (box_left, box_upper))
-                    image = new_im
-                    # image = image.resize((width_new, height_new), resample=Image.BILINEAR)
-                    ##############################################################
-                    image = np.array(image)
-                    if len(image.shape) < 3:
-                        image = np.dstack((image, image, image))
-                    image = np.expand_dims(image, axis=0)
-
-                    logits_sess = sess.run(logits_infer, feed_dict={
-                        data_x: image, drop_probability: 0.0, is_training: False})
-
-                    pred_reverse = np.argmax(logits_sess[0], axis=2)
-                    # pred_reverse[np.nonzero(pred_reverse < 92)] = 183
-                    pred_png = Image.fromarray(pred_reverse.astype(np.uint8)).convert('P')
-                    ##############################################################
-                    pred_png = pred_png.crop((box_left, box_upper, width, height))
-                    # pred_png = pred_png.resize((width, height), resample=Image.NEAREST)
-                    ##############################################################
-                    pred_png.putpalette(list(coco_parser.cmap))
-                    pred_png.save('{}/test-dev/{}'.format(
-                        FLAGS.logs_dir, file_name.replace('.jpg', '.png')), format='PNG')
+                coco_parser.inference_with_tf(sess=sess, logits_infer=logits_infer, data_x=data_x,
+                                              drop_probability=drop_probability, is_training=is_training,
+                                              is_dev=True, pool_times=4)
 
 if __name__ == "__main__":
     tf.app.run()

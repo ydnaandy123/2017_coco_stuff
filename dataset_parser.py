@@ -46,6 +46,8 @@ class MSCOCOParser:
         self.checkpoint_dir = os.path.join(flags.logs_dir, 'models')
         self.logs_image_train_dir = os.path.join(flags.logs_dir, 'images_train')
         self.logs_image_valid_dir = os.path.join(flags.logs_dir, 'images_valid')
+        self.logs_image_test_dir = os.path.join(flags.logs_dir, 'test')
+        self.logs_image_test_dev_dir = os.path.join(flags.logs_dir, 'test-dev')
         self.dir_check()
 
     def dir_check(self):
@@ -58,6 +60,10 @@ class MSCOCOParser:
             os.makedirs(self.logs_image_train_dir)
         if not os.path.exists(self.logs_image_valid_dir):
             os.makedirs(self.logs_image_valid_dir)
+        if not os.path.exists(self.logs_image_test_dir):
+            os.makedirs(self.logs_image_test_dir)
+        if not os.path.exists(self.logs_image_test_dev_dir):
+            os.makedirs(self.logs_image_test_dev_dir)
 
     def load_val_paths(self):
         self.annotations_val_paths = sorted(glob(os.path.join(self.annotations_val_dir, "*.png")))
@@ -230,28 +236,6 @@ class MSCOCOParser:
 
         writer.close()
 
-    @staticmethod
-    def preprocess_data(image, label):
-        # Subtract off the mean and divide by the variance of the pixels.
-        image = tf.cast(image, tf.float32)
-        image = image - 127.5
-        # tf.image.per_image_standardization(image)
-
-        label = tf.cast(label, tf.int32)
-        return image, label
-
-    @staticmethod
-    def deprocess_data(image, label, pred_batches=None):
-        image = image + 127.5
-        label += 91
-        label[label == 91] = 183
-        if pred_batches is not None:
-            pred_batches = np.argmax(pred_batches, axis=3) + 91
-            pred_batches[pred_batches == 91] = 183
-            return image, label, pred_batches
-        else:
-            return image, label
-
     def parse_record(self, record):
         features = tf.parse_single_example(
             record,
@@ -313,6 +297,61 @@ class MSCOCOParser:
         dataset = dataset.batch(batch_size)
         return dataset
 
+    def tfrecord_get_dataset_test(self, name, batch_size):
+        filename = os.path.join(self.TFRecord_dir, name)
+        dataset = tf.contrib.data.TFRecordDataset(filename)
+
+        def parse_record_test(record):
+            features = tf.parse_single_example(
+                record,
+                # Defaults are not specified since both keys are required.
+                features={
+                    'height': tf.FixedLenFeature([], tf.int64),
+                    'width': tf.FixedLenFeature([], tf.int64),
+                    'image_raw': tf.FixedLenFeature([], tf.string),
+                })
+
+            height = tf.cast(features['height'], tf.int32)
+            width = tf.cast(features['width'], tf.int32)
+            # Convert from a scalar string tensor (whose single string has
+            # length mnist.IMAGE_PIXELS) to a uint8 tensor with shape
+            # [mnist.IMAGE_PIXELS].
+            image = tf.decode_raw(features['image_raw'], tf.uint8)
+            image = tf.reshape(image, [height, width, 3])
+
+            image = tf.cast(image, tf.float32)
+            image = image - 127.5
+            # image, label = self.preprocess_data(image=image, label=label)
+
+            return image
+
+        dataset = dataset.map(parse_record_test)
+        dataset = dataset.batch(batch_size)
+        return dataset
+
+    @staticmethod
+    def preprocess_data(image, label):
+        # Subtract off the mean and divide by the variance of the pixels.
+        image = tf.cast(image, tf.float32)
+        image = image - 127.5
+        # tf.image.per_image_standardization(image)
+
+        label = tf.cast(label, tf.int32)
+        return image, label
+
+    @staticmethod
+    def deprocess_data(image, label, pred_batches=None):
+        image = image + 127.5
+        # label += 91
+        # label[label == 91] = 183
+        if pred_batches is not None:
+            # pred_batches = np.argmax(pred_batches, axis=3) + 91
+            # pred_batches[pred_batches == 91] = 183
+            pred_batches = np.argmax(pred_batches, axis=3)
+            return image, label, pred_batches
+        else:
+            return image, label
+
     def visualize_data(self, x_batches, y_batches, pred_batches, global_step, logs_dir):
         x_batches, y_batches, pred_batches, = self.deprocess_data(
             image=x_batches, label=y_batches, pred_batches=pred_batches)
@@ -333,6 +372,56 @@ class MSCOCOParser:
             pred_png.putpalette(list(self.cmap))
             pred_png.save('{}/{:d}_{}_2_pred.png'.format(
                 logs_dir, global_step, batch_idx), format='PNG')
+
+    def inference_with_tf(self, sess, logits_infer, data_x, drop_probability, is_training, is_dev=True, pool_times=4):
+        factor = np.power(2, pool_times)
+        # Initialize COCO ground truth API
+        if is_dev:
+            print('test-dev!')
+            coco_gt = COCO(self.annotations_test_dev_info)
+        else:
+            print('test!')
+            coco_gt = COCO(self.annotations_test_info)
+        # Inference
+        for key_idx, key in enumerate(coco_gt.imgs):
+            print('{:d}/{:d}'.format(key_idx, len(coco_gt.imgs)))
+            value = coco_gt.imgs[key]
+            file_name = value['file_name']
+            image = Image.open(os.path.join(self.images_test_dir, file_name))
+            ##############################################################
+            width, height = image.size
+            width_new = ((width // factor) + 1) * factor if width % factor != 0 else width
+            height_new = ((height // factor) + 1) * factor if height % factor != 0 else height
+
+            new_im = Image.new("RGB", (width_new, height_new))
+            box_left = np.floor((width_new - width) / 2).astype(np.int32)
+            box_upper = np.floor((height_new - height) / 2).astype(np.int32)
+            new_im.paste(image, (box_left, box_upper))
+            image = new_im
+            # image = image.resize((width_new, height_new), resample=Image.BILINEAR)
+            ##############################################################
+            image = np.array(image)
+            if len(image.shape) < 3:
+                image = np.dstack((image, image, image))
+            image = np.expand_dims(image, axis=0)
+
+            logits_sess = sess.run(logits_infer, feed_dict={
+                data_x: image, drop_probability: 0.0, is_training: False})
+
+            pred_reverse = np.argmax(logits_sess[0], axis=2)
+            # pred_reverse[np.nonzero(pred_reverse < 92)] = 183
+            pred_png = Image.fromarray(pred_reverse.astype(np.uint8)).convert('P')
+            ##############################################################
+            pred_png = pred_png.crop((box_left, box_upper, width, height))
+            # pred_png = pred_png.resize((width, height), resample=Image.NEAREST)
+            ##############################################################
+            pred_png.putpalette(list(self.cmap))
+            if is_dev:
+                pred_png.save('{}/{}'.format(
+                    self.logs_image_test_dev_dir, file_name.replace('.jpg', '.png')), format='PNG')
+            else:
+                pred_png.save('{}/{}'.format(
+                    self.logs_image_test_dir, file_name.replace('.jpg', '.png')), format='PNG')
 
 
 class ELECParser:
