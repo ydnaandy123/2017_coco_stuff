@@ -1,7 +1,7 @@
 from __future__ import print_function
 import tensorflow as tf
 import dataset_parser
-from model import stacked2_nearest
+from model import class_super_lite, get_shape
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_integer("image_height", "448", "image target height")
@@ -9,11 +9,12 @@ tf.flags.DEFINE_integer("image_width", "448", "image target width")
 tf.flags.DEFINE_integer("num_of_feature", "3", "number of feature")
 tf.flags.DEFINE_integer("num_of_class", "92", "number of class")
 
-tf.flags.DEFINE_string("network_name", "stacked_nearest", "the name og this network")
+tf.flags.DEFINE_string("network_name", "class_super_lite", "the name og this network")
 tf.flags.DEFINE_integer("num_epochs", "50", "number of epochs for training")
-tf.flags.DEFINE_integer("batch_size", "16", "batch size for training")
+tf.flags.DEFINE_integer("batch_size", "4", "batch size for training")
 tf.flags.DEFINE_float("learning_rate", "1e-4", "Learning rate for Adam Optimizer")
-tf.flags.DEFINE_string('mode', "test-dev", "Mode train/ test-dev/ test")
+tf.flags.DEFINE_string('mode', "train", "Mode train/ test-dev/ test")
+
 
 
 def main(args=None):
@@ -21,7 +22,7 @@ def main(args=None):
     tf.reset_default_graph()
     FLAGS.logs_dir = './logs_' + FLAGS.network_name
     print(FLAGS.logs_dir)
-    predict_downscale, bottle_downscale = 8, 64
+    predict_downscale, bottle_downscale = 2, 64
     """
     Read coco parser     
     """
@@ -32,8 +33,8 @@ def main(args=None):
     Transform mscoco to TFRecord format (Only do once.)     
     """
     if False:
-        coco_parser.data2record(name='coco_stuff2017_train_10.tfrecords', is_training=True, test_num=10)
-        coco_parser.data2record(name='coco_stuff2017_val_10.tfrecords', is_training=False, test_num=10)
+        coco_parser.data2record(name='coco_stuff2017_train_super.tfrecords', is_training=True, test_num=10)
+        coco_parser.data2record(name='coco_stuff2017_val_super.tfrecords', is_training=False, test_num=10)
         # coco_parser.data2record_test(name='coco_stuff2017_test-dev_all_label.tfrecords', is_dev=True, test_num=None)
         # coco_parser.data2record_test(name='coco_stuff2017_test_all_label.tfrecords', is_dev=False, test_num=None)
         return
@@ -47,10 +48,11 @@ def main(args=None):
         with tf.name_scope(name='Input'):
             # Dataset [10, all_label]
             training_dataset = coco_parser.tfrecord_get_dataset(
-                name='coco_stuff2017_train_all_label.tfrecords', batch_size=FLAGS.batch_size,
-                shuffle_size=None)
+                name='coco_stuff2017_train_super.tfrecords', batch_size=FLAGS.batch_size,
+                super_class=True, shuffle_size=None)
             validation_dataset = coco_parser.tfrecord_get_dataset(
-                name='coco_stuff2017_val_all_label.tfrecords', batch_size=FLAGS.batch_size)
+                name='coco_stuff2017_val_super.tfrecords', batch_size=FLAGS.batch_size,
+                super_class=True, shuffle_size=None)
             # A feed-able iterator
             handle = tf.placeholder(tf.string, shape=[])
             iterator = tf.contrib.data.Iterator.from_string_handle(
@@ -68,15 +70,19 @@ def main(args=None):
         """
         Network (Computes predictions from the inference model)
         """
+        # The prediction shape is same to input x
+        # Training with resize_crop_padding first, then random cropping
         with tf.name_scope(name='Network'):
             # Training with fixed shape (used for training and validation) (use TFRecord)
             with tf.variable_scope(FLAGS.network_name, reuse=False):
-                logits_stacks, logits_up = stacked2_nearest(
+                logits_stacks, logits_up = class_super_lite(
                     x=next_x, flags=FLAGS, is_training=is_training, drop_probability=drop_probability)
             prediction = tf.argmax(input=logits_up, axis=3)
+            prediction_sup_sup = tf.argmax(tf.image.resize_bilinear(logits_stacks[0], get_shape(next_x)[1:3]), axis=3)
+            prediction_sup = tf.argmax(tf.image.resize_bilinear(logits_stacks[1], get_shape(next_x)[1:3]), axis=3)
             # Testing with arbitrary shape (used for testing) (use placeholder)
             with tf.variable_scope(FLAGS.network_name, reuse=True):
-                logits_stacks_test, logits_up_test = stacked2_nearest(
+                logits_stacks_test, logits_up_test = class_super_lite(
                     x=test_x, flags=FLAGS, is_training=False, drop_probability=0.0)
             prediction_test = tf.argmax(input=logits_up_test, axis=3)
         """
@@ -84,39 +90,34 @@ def main(args=None):
         """
         with tf.name_scope(name='Optimize'):
             # Label scale down
+            # next_y_scale_down = tf.image.resize_nearest_neighbor(
+            #    tf.expand_dims(next_y, axis=3),
+            #    [FLAGS.image_height // predict_downscale, FLAGS.image_width // predict_downscale])
             next_y_scale_down = tf.image.resize_nearest_neighbor(
-                tf.expand_dims(next_y, axis=3),
-                [FLAGS.image_height // predict_downscale, FLAGS.image_width // predict_downscale])
-            next_y_scale_down = tf.squeeze(next_y_scale_down, axis=3)
+                next_y, [FLAGS.image_height // predict_downscale, FLAGS.image_width // predict_downscale])
+            next_y_scale_down_class = next_y_scale_down[:, :, :, 0]
+            next_y_scale_down_class_sup = next_y_scale_down[:, :, :, 1]
+            next_y_scale_down_class_sup_sup = next_y_scale_down[:, :, :, 2]
             # Make label one-hot
-            next_y_one_hot = tf.one_hot(next_y_scale_down, 184, axis=-1)
-            '''
-            loss_sum = 0
-            for stack_idx, logits_stack in enumerate(logits_stacks):
-                loss_name = 'loss_{:d}'.format(stack_idx)
-                with tf.variable_scope(loss_name, reuse=False):
-                    loss = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
-                        logits=logits_stacks[stack_idx], labels=next_y_scale_down, name=loss_name)))
-                loss_sum += loss
-            # sparse loss
-            loss_stack1 = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
-                logits=logits_stacks[0], labels=next_y_scale_down, name="loss_stack1")))
-            loss_stack2 = tf.reduce_mean((tf.nn.sparse_softmax_cross_entropy_with_logits(
-                logits=logits_stacks[1], labels=next_y_scale_down, name="loss_stack2")))
-            loss = 0.4 * loss_stack1 + 0.6 * loss_stack2
-            '''
+            next_y_one_hot_class = tf.one_hot(next_y_scale_down_class, 184, axis=-1)
+            next_y_one_hot_class_sup = tf.one_hot(next_y_scale_down_class_sup, 17, axis=-1)
+            next_y_one_hot_class_sup_sup = tf.one_hot(next_y_scale_down_class_sup_sup, 4, axis=-1)
+
+            # Tensor cross_entropy
+            loss_stack_class_sup_sup = tf.nn.softmax_cross_entropy_with_logits(
+                labels=next_y_one_hot_class_sup_sup[:, :, :, 1:],  logits=logits_stacks[0][:, :, :, :],
+                name='loss_stack_class_sup_sup')
+            loss_stack_class_sup = tf.nn.softmax_cross_entropy_with_logits(
+                labels=next_y_one_hot_class_sup[:, :, :, 1:],  logits=logits_stacks[1][:, :, :, :],
+                name='loss_stack_class_sup')
+            loss_stack_class = tf.nn.softmax_cross_entropy_with_logits(
+                labels=next_y_one_hot_class[:, :, :, 92:],  logits=logits_stacks[2][:, :, :, :],
+                name='loss_stack_class')
+
+            loss = loss_stack_class_sup_sup + loss_stack_class_sup + loss_stack_class
             # Weighted loss (Not calculate unassigned label '0')
-            loss_stack1 = tf.nn.softmax_cross_entropy_with_logits(
-                labels=next_y_one_hot[:, :, :, 92:], logits=logits_stacks[0][:, :, :, :], name='loss_stack1')
-            loss_stack2 = tf.nn.softmax_cross_entropy_with_logits(
-                labels=next_y_one_hot[:, :, :, 92:], logits=logits_stacks[1][:, :, :, :], name='loss_stack2')
-            # loss_stack3 = tf.nn.softmax_cross_entropy_with_logits(
-            #     labels=next_y_one_hot[:, :, :, 92:], logits=logits_stacks[2][:, :, :, 1:], name='loss_stack3')
-            loss = 0.4 * loss_stack1 + 0.6 * loss_stack2
-
-            ignored_pixels = next_y_one_hot[:, :, :, 0]
+            ignored_pixels = next_y_one_hot_class_sup_sup[:, :, :, 0]
             loss = loss * (1 - ignored_pixels)
-
             loss = tf.reduce_mean(input_tensor=loss)
             # Optimizer
             global_step = tf.Variable(0, trainable=False)
@@ -134,7 +135,7 @@ def main(args=None):
         with tf.name_scope(name='Others'):
             # Accuracy
             update_op, valid_accuracy = tf.metrics.accuracy(
-                labels=next_y, predictions=prediction+92)
+                labels=next_y[:, :, :, 0], predictions=prediction+92)
             # Graph Logs
             summary_loss = tf.summary.scalar("train_loss", loss)
             summary_valid_accuracy = tf.summary.scalar("valid_accuracy_average", valid_accuracy_average)
@@ -190,9 +191,11 @@ def main(args=None):
                         try:
                             # Optimize training loss
                             _, loss_sess, global_step_sess, summary_loss_sess, \
-                                next_x_sess, next_y_sess, prediction_sess \
+                                next_x_sess, next_y_sess, prediction_sess, \
+                                prediction_sub_sess, prediction_sub_sub_sess \
                                 = sess.run([train_op, loss, global_step, summary_loss,
-                                            next_x, next_y, prediction], feed_dict=feed_dict_train)
+                                            next_x, next_y, prediction,
+                                            prediction_sup, prediction_sup_sup], feed_dict=feed_dict_train)
                             print('[{:d}/{:d}], global_step:{:d}, training loss:{:f}'.format(
                                 epoch, FLAGS.num_epochs, global_step_sess, loss_sess))
 
@@ -203,9 +206,10 @@ def main(args=None):
                             # Observe training situation (For debugging.)
                             if True and global_step_sess % observe_freq == 1:
                                 print('Logging training images.')
-                                coco_parser.visualize_data(
+                                coco_parser.visualize_data_class(
                                     x_batches=next_x_sess, y_batches=next_y_sess,
                                     global_step=global_step_sess, pred_batches=prediction_sess,
+                                    pred_batches_sup=prediction_sub_sess, pred_batches_sup_sup=prediction_sub_sub_sess,
                                     logs_dir=coco_parser.logs_image_train_dir)
 
                             # Logging the events (validation)
@@ -215,8 +219,10 @@ def main(args=None):
                                 while True:
                                     try:
                                         # Logging the events
-                                        next_x_sess, next_y_sess, prediction_sess, valid_accuracy_sess = \
-                                            sess.run([next_x, next_y, prediction, valid_accuracy],
+                                        next_x_sess, next_y_sess, prediction_sess, valid_accuracy_sess, \
+                                            prediction_sub_sess, prediction_sub_sub_sess = \
+                                            sess.run([next_x, next_y, prediction, valid_accuracy,
+                                                      prediction_sup, prediction_sup_sup],
                                                      feed_dict=feed_dict_valid)
                                         print('val_step:[{:d}/{:d}], validation accuracy:{:f}'.format(
                                             valid_times, val_max_num, valid_accuracy_sess))
@@ -226,12 +232,14 @@ def main(args=None):
                                             # next_x_sess, next_y_sess, logits_sess = \
                                             #     sess.run([next_x, next_y, logits], feed_dict=feed_dict_infer)
                                             print('Logging validation images.')
-                                            coco_parser.visualize_data(
+                                            coco_parser.visualize_data_class(
                                                 x_batches=next_x_sess, y_batches=next_y_sess,
                                                 global_step=global_step_sess, pred_batches=prediction_sess,
+                                                pred_batches_sup=prediction_sub_sess,
+                                                pred_batches_sup_sup=prediction_sub_sub_sess,
                                                 logs_dir=coco_parser.logs_image_valid_dir)
 
-                                            valid_sum_accuracy += valid_accuracy_sess
+                                        valid_sum_accuracy += valid_accuracy_sess
                                         valid_times += 1
                                         if valid_times > val_max_num:
                                             break

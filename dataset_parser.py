@@ -40,7 +40,15 @@ class MSCOCOParser:
         cmap = np.vstack((cmap, padding))
         cmap = cmap.reshape((-1))
         assert len(cmap) == 768, 'Error: Color map must have exactly 256*3 elements!'
-        self.cmap = cmap
+        self.cmap = list(cmap)
+
+        cmap = np.array(cocostuffhelper.getCMap(stuffStartId=1))
+        cmap = (cmap * 255).astype(int)
+        padding = np.zeros((256 - cmap.shape[0], 3), np.int8)
+        cmap = np.vstack((cmap, padding))
+        cmap = cmap.reshape((-1))
+        assert len(cmap) == 768, 'Error: Color map must have exactly 256*3 elements!'
+        self.cmap_test = list(cmap)
 
         self.logs_dir = os.path.join(flags.logs_dir, 'events')
         self.checkpoint_dir = os.path.join(flags.logs_dir, 'models')
@@ -195,27 +203,42 @@ class MSCOCOParser:
         # label = tf.image.resize_images(images=label, size=(height, width),
         #                                method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
         #################################################################################################
-
         # augmentation:
-        # image = tf.cast(image, tf.float32)
-        # label = tf.cast(label, tf.float32)
-        # image = tf.image.random_brightness(image, max_delta=63)
-        # image = tf.image.random_contrast(image, lower=0.2, upper=1.8)
+        if True:
+            image = tf.cast(image, tf.float32)
+            label = tf.cast(label, tf.float32)
+            image = tf.image.random_hue(image, max_delta=0.05)
+            image = tf.image.random_contrast(image, lower=0.3, upper=1.0)
+            image = tf.image.random_brightness(image, max_delta=0.2)
+            image = tf.image.random_saturation(image, lower=0.0, upper=2.0)
+            image = tf.minimum(image, 255.0)
+            image = tf.maximum(image, 0.0)
+
+        # Some of these functions may overflow and result in pixel
+        # values beyond the [0, 1] range. It is unclear from the
+        # documentation of TensorFlow 0.10.0rc0 whether this is
+        # intended. A simple solution is to limit the range.
+
+        # Limit the image pixels between [0, 1] in case of overflow.
+        # image = tf.minimum(image, 1.0)
 
         combined = tf.concat((image, label), axis=2)
         #################################################################################################
         # combined_crop = tf.image.resize_image_with_crop_or_pad(combined, self.image_height, self.image_width)
         # random crop
-        image_height = tf.maximum(height, self.image_height)
-        image_width = tf.maximum(width, self.image_width)
-        offset_height = (image_height - height) // 2
-        offset_width = (image_width - width) // 2
+        if True:
+            image_height = tf.maximum(height, self.image_height)
+            image_width = tf.maximum(width, self.image_width)
+            offset_height = (image_height - height) // 2
+            offset_width = (image_width - width) // 2
 
-        combined_pad = tf.image.pad_to_bounding_box(
-            combined, offset_height, offset_width,
-            image_height,
-            image_width)
-        combined_crop = tf.random_crop(value=combined_pad, size=(self.image_height, self.image_width, 4))
+            combined_pad = tf.image.pad_to_bounding_box(
+                combined, offset_height, offset_width,
+                image_height,
+                image_width)
+            combined_crop = tf.random_crop(value=combined_pad, size=(self.image_height, self.image_width, 4))
+        else:
+            combined_crop = tf.image.resize_image_with_crop_or_pad(combined, self.image_height, self.image_width)
         #################################################################################################
         combined_crop = tf.image.random_flip_left_right(combined_crop)
         # combined_crop = tf.image.crop_to_bounding_box(combined_pad, 0, 0, FLAGS.image_height, FLAGS.image_width)
@@ -231,10 +254,101 @@ class MSCOCOParser:
 
         return image, label
 
-    def tfrecord_get_dataset(self, name, batch_size, shuffle_size=None):
-        filename = os.path.join(self.TFRecord_dir, name)
-        dataset = tf.contrib.data.TFRecordDataset(filename)
-        dataset = dataset.map(self.parse_record)
+    def parse_record_super(self, record):
+        features = tf.parse_single_example(
+            record,
+            # Defaults are not specified since both keys are required.
+            features={
+                'height': tf.FixedLenFeature([], tf.int64),
+                'width': tf.FixedLenFeature([], tf.int64),
+                'image_raw': tf.FixedLenFeature([], tf.string),
+                'label_raw': tf.FixedLenFeature([], tf.string),
+                'label_sup_raw': tf.FixedLenFeature([], tf.string),
+                'label_sup_sup_raw': tf.FixedLenFeature([], tf.string)
+            })
+
+        height = tf.cast(features['height'], tf.int32)
+        width = tf.cast(features['width'], tf.int32)
+        # Convert from a scalar string tensor (whose single string has
+        # length mnist.IMAGE_PIXELS) to a uint8 tensor with shape
+        # [mnist.IMAGE_PIXELS].
+        image = tf.decode_raw(features['image_raw'], tf.uint8)
+        image = tf.reshape(image, [height, width, 3])
+        label = tf.decode_raw(features['label_raw'], tf.uint8)
+        label = tf.reshape(label, [height, width, 1])
+        label_sup = tf.decode_raw(features['label_sup_raw'], tf.uint8)
+        label_sup = tf.reshape(label_sup, [height, width, 1])
+        label_sup_sup = tf.decode_raw(features['label_sup_sup_raw'], tf.uint8)
+        label_sup_sup = tf.reshape(label_sup_sup, [height, width, 1])
+
+        #################################################################################################
+        # scale down
+        # height = height // 2
+        # width = width // 2
+        # image = tf.cast(image, tf.float32)
+        # label = tf.cast(label, tf.float32)
+        # image = tf.image.resize_images(images=image, size=(height, width),
+        #                                method=tf.image.ResizeMethod.BILINEAR)
+        # label = tf.image.resize_images(images=label, size=(height, width),
+        #                                method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+        #################################################################################################
+        # augmentation:
+        # image = tf.cast(image, tf.float32)
+        # label = tf.cast(label, tf.float32)
+        # image = tf.image.random_brightness(image, max_delta=63)
+        # image = tf.image.random_contrast(image, lower=0.2, upper=1.8)
+        if True:
+            image = tf.cast(image, tf.float32)
+            label = tf.cast(label, tf.float32)
+            label_sup = tf.cast(label_sup, tf.float32)
+            label_sup_sup = tf.cast(label_sup_sup, tf.float32)
+            image = tf.image.random_hue(image, max_delta=0.05)
+            image = tf.image.random_contrast(image, lower=0.3, upper=1.0)
+            image = tf.image.random_brightness(image, max_delta=0.2)
+            image = tf.image.random_saturation(image, lower=0.0, upper=2.0)
+            image = tf.minimum(image, 255.0)
+            image = tf.maximum(image, 0.0)
+
+        combined = tf.concat((image, label, label_sup, label_sup_sup), axis=2)
+        #################################################################################################
+        # combined_crop = tf.image.resize_image_with_crop_or_pad(combined, self.image_height, self.image_width)
+        if True:
+            image_height = tf.maximum(height, self.image_height)
+            image_width = tf.maximum(width, self.image_width)
+            offset_height = (image_height - height) // 2
+            offset_width = (image_width - width) // 2
+
+            combined_pad = tf.image.pad_to_bounding_box(
+                combined, offset_height, offset_width,
+                image_height,
+                image_width)
+            combined_crop = tf.random_crop(value=combined_pad, size=(self.image_height, self.image_width, 6))
+        else:
+            combined_crop = tf.image.resize_image_with_crop_or_pad(combined, self.image_height, self.image_width)
+        #################################################################################################
+        combined_crop = tf.image.random_flip_left_right(combined_crop)
+        # combined_crop = tf.image.crop_to_bounding_box(combined_pad, 0, 0, FLAGS.image_height, FLAGS.image_width)
+        # combine = tf.image.resize_image_with_crop_or_pad(combine, FLAGS.image_height, FLAGS.image_width)
+        # OPTIONAL: Could reshape into a 28x28 image and apply distortions
+        # here.  Since we are not applying any distortions in this
+        # example, and the next step expects the image to be flattened
+        # into a vector, we don't bother.
+
+        image = combined_crop[:, :, :3]
+        label = combined_crop[:, :, -3:]
+        image, label = self.preprocess_data(image=image, label=label)
+
+        return image, label
+
+    def tfrecord_get_dataset(self, name, batch_size, shuffle_size=None, super_class=False):
+        # filename = os.path.join(self.TFRecord_dir, name)
+        filename1 = os.path.join(self.TFRecord_dir, 'coco_stuff2017_train_super.tfrecords')
+        filename2 = os.path.join(self.TFRecord_dir, 'coco_stuff2017_val_super.tfrecords')
+        dataset = tf.contrib.data.TFRecordDataset([filename1, filename2])
+        if super_class:
+            dataset = dataset.map(self.parse_record_super)
+        else:
+            dataset = dataset.map(self.parse_record)
         if shuffle_size is not None:
             dataset = dataset.shuffle(buffer_size=shuffle_size)
         dataset = dataset.batch(batch_size)
@@ -284,6 +398,53 @@ class MSCOCOParser:
             pred_png = Image.fromarray(pred_batch.astype(np.uint8)).convert('P')
             pred_png.putpalette(list(self.cmap))
             pred_png.save('{}/{:d}_{}_2_pred.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
+
+    def visualize_data_class(self, x_batches, y_batches, pred_batches, pred_batches_sup, pred_batches_sup_sup,
+                             global_step, logs_dir):
+        x_batches = x_batches
+        y_batches_class = np.squeeze(y_batches[:, :, :, 0])
+        y_batches_sup = np.squeeze(y_batches[:, :, :, 1])
+        y_batches_sup_sup = np.squeeze(y_batches[:, :, :, 2])
+        pred_batches_class = np.squeeze(pred_batches) + 92
+        pred_batches_sup = np.squeeze(pred_batches_sup) + 1
+        pred_batches_sup_sup = np.squeeze(pred_batches_sup_sup) + 1
+
+        for batch_idx, x_batch in enumerate(x_batches):
+            x_png = Image.fromarray(x_batch.astype(np.uint8)).convert('RGB')
+            x_png.save('{}/{:d}_{:d}_0_rgb.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
+
+        for batch_idx, y_batch in enumerate(y_batches_class):
+            y_png = Image.fromarray(y_batch.astype(np.uint8)).convert('P')
+            y_png.putpalette(self.cmap_test)
+            y_png.save('{}/{:d}_{:d}_1_gt2.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
+        for batch_idx, y_batch in enumerate(y_batches_sup):
+            y_png = Image.fromarray(y_batch.astype(np.uint8)).convert('P')
+            y_png.putpalette(self.cmap_test)
+            y_png.save('{}/{:d}_{:d}_1_gt1.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
+        for batch_idx, y_batch in enumerate(y_batches_sup_sup):
+            y_png = Image.fromarray(y_batch.astype(np.uint8)).convert('P')
+            y_png.putpalette(self.cmap_test)
+            y_png.save('{}/{:d}_{:d}_1_gt0.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
+
+        for batch_idx, pred_batch in enumerate(pred_batches_class):
+            pred_png = Image.fromarray(pred_batch.astype(np.uint8)).convert('P')
+            pred_png.putpalette(self.cmap_test)
+            pred_png.save('{}/{:d}_{}_2_pred2.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
+        for batch_idx, pred_batch in enumerate(pred_batches_sup):
+            pred_png = Image.fromarray(pred_batch.astype(np.uint8)).convert('P')
+            pred_png.putpalette(self.cmap_test)
+            pred_png.save('{}/{:d}_{}_2_pred1.png'.format(
+                logs_dir, global_step, batch_idx), format='PNG')
+        for batch_idx, pred_batch in enumerate(pred_batches_sup_sup):
+            pred_png = Image.fromarray(pred_batch.astype(np.uint8)).convert('P')
+            pred_png.putpalette(self.cmap_test)
+            pred_png.save('{}/{:d}_{}_2_pred0.png'.format(
                 logs_dir, global_step, batch_idx), format='PNG')
 
     def inference_with_tf(self, sess, prediction_test, test_x, is_dev, bottle_downscale):
@@ -342,7 +503,7 @@ class MSCOCOParser:
             # pred_png = pred_png.resize((ori_width, ori_height), resample=Image.NEAREST)
             ##############################################################
             pred_png = pred_png.convert('P')
-            pred_png.putpalette(list(self.cmap))
+            pred_png.putpalette(self.cmap)
             if is_dev:
                 pred_png.save('{}/{}'.format(
                     self.logs_image_test_dev_dir, file_name.replace('.jpg', '.png')), format='PNG')
