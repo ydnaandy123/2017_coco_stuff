@@ -8,7 +8,7 @@ http://cocodataset.org/#stuff-challenge2017
 - Label Hierarchy (multi)
 
 ## Encode-decoder
-![Encode-decoder](src/ae.png =100x20)
+<img src=".src/ae.png" alt="Encode-decoder" width="100px" height="20px">
 - The most basic model
 - Seems it reach it's upper bound
 - The learning matters a lot
