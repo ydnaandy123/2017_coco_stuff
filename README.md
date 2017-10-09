@@ -8,13 +8,12 @@ http://cocodataset.org/#stuff-challenge2017
 - Label Hierarchy (multi)
 
 ### Encode-decoder
-<img src="https://github.com/ydnaandy123/2017_coco_stuff/blob/master/src/ae.png" width="100">
+<img src="src/ae.png" width="400">
 - The basic model
-- tedt-dev2017 mIOU: 0.1234
+- tedt-dev2017 mIoU: 0.1234
 
 ### Label Hierarchy
-<img src="src/multi.png" width="100">
-![Label Hierarchy](src/multi.png)
+<img src="src/multi.png">
 - According to [Label Hierarchy](https://github.com/nightrome/cocostuff#label-hierarchy)
 - From left to right [image, gt1, gt2, g3, predict1, predict2, predict3]
 - Aluxary loss
@@ -23,12 +22,12 @@ http://cocodataset.org/#stuff-challenge2017
 - tedt-dev2017 mIOU: 0.1049 
     
 ### Squeeze-and-Excitation
-![Squeeze-and-Excitation](src/se.png)
+<img src="src/se.png"  width="400">
 - The network uses the Squeeze-and-Excitation(https://github.com/hujie-frank/SENet) technique to improve the performance.
 - tedt-dev2017 mIOU:  0.1230 
 
 ### Stacked Hourglass
-![Stacked Hourglass](./src/stack.png)
+<img src="src/stack.png"  width="400">
 - The network imitate Stacked Hourglass Networks for Human Pose Estimation(https://arxiv.org/abs/1603.06937)
 - two consecutive stack. one
 - test-dev2017 mIOU: 0.1245 
