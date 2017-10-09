@@ -4,10 +4,16 @@ http://cocodataset.org/#stuff-challenge2017
 # Results
 
 ## Encode-decoder
-1. like U-net
+![Encode-decoder](src/ae.png)
+- The most basic model
+- Seems it reach it's upper bound
+- The learning matters a lot
+![Encode-decoder](src/ae_loss.png)
 
-## SE
-- Se
+## Squeeze-and-Excitation
+-  The network uses the Squeeze-and-Excitation (https://github.com/hujie-frank/SENet) technique to improve the performance.
+![Squeeze-and-Excitation](src/se.png)
+
 
 ## Label Hierarchy
 ![Label Hierarchy](src/multi.png)
