@@ -54,7 +54,7 @@ http://cocodataset.org/#stuff-challenge2017
  after learning rate changed, and shortly decrease when data augmentation is applied)
  
 ## More parameters?
-![low](src/low.png)
+![low](src/slow.png)
  
 - Is more parameter and more complex and deeper model the only way to increase accuracy?
 - DenseNet, ResNet, Dilation are very attractive, but I feel hard when I train it from scratch.
