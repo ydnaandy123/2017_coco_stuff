@@ -1,14 +1,17 @@
 # 2017_coco_stuff
 http://cocodataset.org/#stuff-challenge2017
 
-# Results
+# Model
+- Encode-decoder (ae)
+- Stacked Hourglass (stack)
+- Squeeze-and-Excitation (se)
+- Label Hierarchy (multi)
 
 ## Encode-decoder
-![Encode-decoder](src/ae.png = 100x20)
+![Encode-decoder](src/ae.png =100x20)
 - The most basic model
 - Seems it reach it's upper bound
 - The learning matters a lot
-![Encode-decoder](src/ae_loss.png)
 
 ## Stacked Hourglass
 ![Stacked Hourglass](./src/stack.png)
@@ -27,5 +30,9 @@ http://cocodataset.org/#stuff-challenge2017
     1. Hierarchy: first predict indoor or outdoor, then plant, and then tree.
     2. Multi-task: network predict different level labels at the same time.
 
-## Dilated
 
+# Result
+![Encode-decoder](src/ae_loss.png)
+
+
+## Dilated
