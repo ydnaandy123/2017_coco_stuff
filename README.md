@@ -46,7 +46,7 @@ http://cocodataset.org/#stuff-challenge2017
 - Is our network too simple (take only couples of hour to converge)?
 ## Improve method?
 
-![Improve](src/ae_loss.png)
+![loss](src/loss.png)
 
 - Seems all models have no significant differences
 - Why there is no improvement after many different modified?
@@ -54,7 +54,7 @@ http://cocodataset.org/#stuff-challenge2017
  after learning rate changed, and shortly decrease when data augmentation is applied)
  
 ## More parameters?
-![Improve](src/alow.png)
+![low](src/low.png)
  
 - Is more parameter and more complex and deeper model the only way to increase accuracy?
 - DenseNet, ResNet, Dilation are very attractive, but I feel hard when I train it from scratch.
