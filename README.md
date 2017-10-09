@@ -58,5 +58,5 @@ http://cocodataset.org/#stuff-challenge2017
  
 - Is more parameter and more complex and deeper model the only way to increase accuracy?
 - DenseNet, ResNet, Dilation are very attractive, but I feel hard when I train it from scratch.
-- I don't have enough time to observe their performance while they may take couples of hour to train.
+- I don't have enough time to observe their performance while they may take couples of days to train.
 - A pretrain model is worth to try   
