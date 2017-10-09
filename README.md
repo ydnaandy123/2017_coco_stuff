@@ -38,11 +38,30 @@ http://cocodataset.org/#stuff-challenge2017
 
 
 # Conclusion
+## Base model
 ![Encode-decoder](src/ae_loss.png)
-
 
 - Seems it reach it's upper bound
 - The learning matters a lot
+- Is our network too simple and it reach it's limit?
+## Improve method?
+
+![Improve](src/ae_loss.png)
+
+- Seems all models have no significant differences
+- Why there is no improvement after many different modified?
+- The other factors except network itself seems having much more affection(all model have increased noticeable performance
+ after learning rate changed, and shortly decrease when data augmentation is applied)
+ 
+ ## More paramether?
+ 
+ - Is more parameter and more complex and deeper model the only way to increase accuracy?
+ - DenseNet, ResNet, Dilation are very attractive, but I feel hard when I train it from scratch.
+ - I don't have enough time to observe their performance while they may take couples of hour to train.
+ - A pretrain model is worth to try   
+
+- 
+
 
 
 ## Dilated
