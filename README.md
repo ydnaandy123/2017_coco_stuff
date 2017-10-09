@@ -42,7 +42,7 @@ http://cocodataset.org/#stuff-challenge2017
 ![Encode-decoder](src/ae_loss.png)
 
 - Seems it reach it's upper bound
-- The learning matters a lot
+- The learning rate matters a lot
 - Is our network too simple (take only couples of hour to converge)?
 ## Improve method?
 
