@@ -32,7 +32,7 @@ http://cocodataset.org/#stuff-challenge2017
 ## Stacked Hourglass
 <img src="src/stack.png"  width="600">
 
-- The network imitate Stacked Hourglass Networks (https://arxiv.org/abs/1603.06937)
+- The network imitates Stacked Hourglass Networks (https://arxiv.org/abs/1603.06937)
 - Two consecutive stack, and one intermediate supervision.
 - test-dev2017 mIoU: 0.1245 
 
@@ -43,20 +43,20 @@ http://cocodataset.org/#stuff-challenge2017
 
 - Seems it reach it's upper bound
 - The learning rate matters a lot
-- Is our network too simple (take only couples of hour to converge)?
+- Is our network too simple (takes only couples of hour to converge)?
 ## Improve method?
 
 ![loss](src/loss.png)
 
 - Seems all models have no significant differences
-- Why there is no improvement after many different modified?
+- Why there is no improvement after this much different modifications?
 - The other factors except network itself seems having much more affection(all model have increased noticeable performance
  after learning rate changed, and shortly decrease when data augmentation is applied)
  
 ## More parameters?
 ![low](src/slow.png)
  
-- Is more parameter and more complex and deeper model the only way to increase accuracy?
+- Is more parameters and more complex model the only way to increase accuracy?
 - DenseNet, ResNet, Dilation are very attractive, but I feel hard when I train it from scratch.
-- I don't have enough time to observe their performance while they may take couples of days to train.
+- I don't have enough time to observe their performances while they may take couples of days to train.
 - A pretrain model is worth to try   
