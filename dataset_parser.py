@@ -17,6 +17,43 @@ def _bytes_feature(value):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
 
 
+class MNISTParser:
+    def __init__(self, dataset_dir, flags):
+        self.image_height, self.image_width = flags.image_height, flags.image_width
+        self.dataset_dir = dataset_dir
+
+        self.images_train_dir = self.dataset_dir + '/images/train2017'
+        self.images_val_dir = self.dataset_dir + '/images/val2017'
+        self.images_test_dir = self.dataset_dir + '/images/test2017'
+        self.annotations_train_dir = self.dataset_dir + '/annotations/stuff_train2017_pixelmaps'
+        self.annotations_val_dir = self.dataset_dir + '/annotations/stuff_val2017_pixelmaps'
+        self.annotations_test_info = self.dataset_dir + '/annotations/image_info_test2017.json'
+        self.TFRecord_dir = './dataset/coco_stuff_TFRecord'
+
+        self.images_val_paths, self.annotations_val_paths, self.val_paths = [], [], []
+        self.images_train_paths, self.annotations_train_paths, self.train_paths = [], [], []
+
+        self.logs_dir = os.path.join(flags.logs_dir, 'events')
+        self.checkpoint_dir = os.path.join(flags.logs_dir, 'models')
+        self.logs_image_train_dir = os.path.join(flags.logs_dir, 'images_train')
+        self.logs_image_valid_dir = os.path.join(flags.logs_dir, 'images_valid')
+        self.logs_image_test_dir = os.path.join(flags.logs_dir, 'test')
+        self.dir_check()
+
+    def dir_check(self):
+        print('checking directories.')
+        if not os.path.exists(self.logs_dir):
+            os.makedirs(self.logs_dir)
+        if not os.path.exists(self.checkpoint_dir):
+            os.makedirs(self.checkpoint_dir)
+        if not os.path.exists(self.logs_image_train_dir):
+            os.makedirs(self.logs_image_train_dir)
+        if not os.path.exists(self.logs_image_valid_dir):
+            os.makedirs(self.logs_image_valid_dir)
+        if not os.path.exists(self.logs_image_test_dir):
+            os.makedirs(self.logs_image_test_dir)
+
+
 class MSCOCOParser:
     def __init__(self, dataset_dir, flags):
         self.image_height, self.image_width = flags.image_height, flags.image_width

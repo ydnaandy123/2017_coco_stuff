@@ -1159,6 +1159,60 @@ def ae_lite_stack(x, flags, drop_probability=0.0, is_training=False):
     return [output_stacked1, output_stacked2], output_up
 
 
+def work(x, flags, drop_probability=0.0, is_training=False):
+    x_normal = (x / 127.5) - 1.0
+    """ td0 448x448"""
+    td0 = conv2d(input_tensor=x_normal, filters=32, activation=tf.nn.relu, name='td0')
+    """ td1 224x224"""
+    td1 = pooling_batch_conv_relu(input_tensor=td0, filters=64, name='td1', is_training=is_training)
+    """ td2 112x112"""
+    td2 = pooling_batch_conv_relu(input_tensor=td1, filters=128, name='td2', is_training=is_training)
+    """ td3 56x56"""
+    td3 = pooling_batch_conv_relu(input_tensor=td2, filters=256, name='td3', is_training=is_training)
+    """ td4 28x28"""
+    td4 = pooling_batch_conv_relu(input_tensor=td3, filters=512, name='td4', is_training=is_training)
+    """ td5 14x14"""
+    td5 = pooling_batch_conv_relu(input_tensor=td4, filters=1024, name='td5', is_training=is_training)
+
+    """ bottle_neck 7x7"""
+    bottle_neck = pooling_batch_conv_relu(input_tensor=td5, filters=4096, k_h=7, k_w=7,
+                                          name='bottle_neck', is_training=is_training)
+    """ tu5 14x14"""
+    up_5 = upscale_concat_batch_conv_relu(input_tensor=bottle_neck, concate_tensor=td5,
+                                          filters=1024, name='up_5', is_training=is_training)
+    """ tu4 28x28"""
+    up_4 = upscale_concat_batch_conv_relu(input_tensor=up_5, concate_tensor=td4,
+                                          filters=512, name='up_4', is_training=is_training)
+    """ tu3 56x56"""
+    up_3 = upscale_concat_batch_conv_relu(input_tensor=up_4, concate_tensor=td3,
+                                          filters=512, name='up_3', is_training=is_training)
+
+    """ output branch """
+    '''
+    # 7x7
+    output_bottle = tf.layers.conv2d(inputs=bottle_neck, filters=flags.num_of_class, activation=None,
+                                     kernel_size=[1, 1], strides=[1, 1],
+                                     padding='same', name='output_bottle')
+    # 14x14
+    output_5 = tf.layers.conv2d(inputs=up_5, filters=flags.num_of_class, activation=None,
+                                kernel_size=[1, 1], strides=[1, 1],
+                                padding='same', name='output_5')
+    # 28x28
+    output_4 = tf.layers.conv2d(inputs=up_4, filters=flags.num_of_class, activation=None,
+                                kernel_size=[1, 1], strides=[1, 1],
+                                padding='same', name='output_4')
+    '''
+    # 56x56
+    output_3 = tf.layers.conv2d(inputs=up_3, filters=flags.num_of_class, activation=None,
+                                kernel_size=[1, 1], strides=[1, 1],
+                                padding='same', name='output_3')
+
+    """ bilinear upscale-up 448x448"""
+    output_up = tf.image.resize_bilinear(output_3, get_shape(x)[1:3])
+
+    return [output_3], output_up
+
+
 def batch_conv_relu(input_tensor, filters, is_training, name, k_h=3, k_w=3, d_h=1, d_w=1):
     with tf.variable_scope(name):
         batch = tf.layers.batch_normalization(inputs=input_tensor, training=is_training, name='batch')
